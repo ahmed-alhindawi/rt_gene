@@ -159,4 +159,17 @@ class s3fd(nn.Module):
         bmax = torch.max(torch.max(chunk[0], chunk[1]), chunk[2])
         cls1 = torch.cat([bmax, chunk[3]], dim=1)
 
-        return [cls1, reg1, cls2, reg2, cls3, reg3, cls4, reg4, cls5, reg5, cls6, reg6]
+        return cls1, reg1, cls2, reg2, cls3, reg3, cls4, reg4, cls5, reg5, cls6, reg6
+
+
+if __name__ == "__main__":
+    import torch
+    mod = s3fd()
+    mod.load_state_dict(torch.load("/home/ahmed/projects/rt_gene/rt_gene/model_nets/SFD/s3fd_facedetector.pth"))
+    mod.eval()
+    mod.to("cuda:0")
+
+    example = torch.randn((1, 3, 244, 244)).float().cuda()
+    mod_jit = torch.jit.trace(mod, example)
+    mod_jit = torch.jit.optimize_for_inference(mod_jit)
+    mod_jit.save("/home/ahmed/Downloads/s3fd.ptc")
