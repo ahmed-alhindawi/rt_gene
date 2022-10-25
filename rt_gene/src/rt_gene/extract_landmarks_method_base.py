@@ -4,7 +4,6 @@ import cv2
 import numpy as np
 import torch
 import torchvision.transforms as transforms
-from torch.backends import cudnn as cudnn
 from tqdm import tqdm
 
 from rt_gene.download_tools import download_external_landmark_models
@@ -50,9 +49,14 @@ class LandmarkMethodBase(object):
         for k in checkpoint.keys():
             model_dict[k.replace('module.', '')] = checkpoint[k]
         model.load_state_dict(model_dict)
-        cudnn.benchmark = True
+
         model = model.to(self.device)
         model.eval()
+
+        ex_input = torch.randn((1, 3, 244, 244)).float().to(self.device)
+        model = torch.jit.trace(model, ex_input)
+        model = torch.jit.optimize_for_inference(model)
+
         return model
 
     def get_full_model_points(self, model_points_file=None):

@@ -51,14 +51,15 @@ class SFDDetector(object):
             import rospkg
             path_to_detector = rospkg.RosPack().get_path('rt_gene') + '/model_nets/SFD/s3fd_facedetector.pth'
 
-        self.face_detector = s3fd()
-        self.face_detector.load_state_dict(torch.load(path_to_detector))
-        self.face_detector.eval()
-        self.face_detector.to(device)
+        face_detector = s3fd()
+        face_detector.load_state_dict(torch.load(path_to_detector))
+        face_detector.eval()
+        face_detector.to(device)
 
-        # self.face_detector = torch.jit.load("/home/ahmed/Downloads/s3fd.ptc")
-        # self.face_detector.eval()
-        # self.face_detector.to(device)
+        ex_input = torch.randn((1, 3, 244, 244)).float().cuda()
+
+        self.face_detector = torch.jit.trace(face_detector, ex_input)
+        self.face_detector = torch.jit.optimize_for_inference(self.face_detector)
 
     def detect_from_image(self, image, threshold=0.5):
         # image = self.tensor_or_path_to_ndarray(tensor_or_path)
@@ -96,7 +97,7 @@ class SFDDetector(object):
         order = scores.argsort().flip(dims=(0,))
 
         keep = []
-        while order.size(0) > 0:
+        while order.numel() > 0:
             i = order[0]
             keep.append(i)
             xx1, yy1 = torch.maximum(x1[i], x1[order[1:]]), torch.maximum(y1[i], y1[order[1:]])
@@ -111,8 +112,13 @@ class SFDDetector(object):
         return keep
 
     def detect(self, net, img, device, process_device="cpu"):
+        ten = torch.from_numpy(img) - torch.Tensor([104, 117, 123])
+        ten = ten.permute((2, 0, 1)).float()
+        ten = ten.to(device)
+        ten = ten.unsqueeze(0)
+
         with torch.no_grad():
-            nn_out = net(img)
+            nn_out = net(ten)
 
         bboxlist = []
         nn_out = [x.to(process_device) for x in nn_out]
