@@ -103,18 +103,12 @@ def get_square_box(box):
     diff = box_height - box_width
     delta = int(abs(diff) / 2)
 
-    if diff == 0:  # Already a square.
-        return box
-    elif diff > 0:  # Height > width, a slim box.
+    if diff > 0.0:  # Height > width, a slim box.
         left_x -= delta
         right_x += delta
-        if diff % 2 == 1:
-            right_x += 1
-    else:  # Width > height, a short box.
+    elif diff < 0.0:  # Width > height, a short box.
         top_y -= delta
         bottom_y += delta
-        if diff % 2 == 1:
-            bottom_y += 1
 
     return [left_x, top_y, right_x, bottom_y]
 

@@ -31,7 +31,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 
 import torch
-import torch.nn.functional as F
 import cv2
 import numpy as np
 
@@ -56,18 +55,19 @@ class SFDDetector(object):
         face_detector.eval()
         face_detector.to(device)
 
-        ex_input = torch.randn((1, 3, 244, 244)).float().cuda()
-
+        ex_input = torch.randn((1, 3, 224, 224)).to(device).float()
         self.face_detector = torch.jit.trace(face_detector, ex_input)
         self.face_detector = torch.jit.optimize_for_inference(self.face_detector)
 
-    def detect_from_image(self, image, threshold=0.5):
+    def detect_from_image(self, image, threshold=0.8):
         # image = self.tensor_or_path_to_ndarray(tensor_or_path)
-        bboxlist = self.detect(self.face_detector, image, device=self.device)
+        bboxlist = self.detect(self.face_detector, image, device=self.device, process_device="cpu")
 
         keep = self.nms(bboxlist, 0.3)
-        bboxlist = bboxlist[keep, :]
-        bboxlist = bboxlist[torch.where(bboxlist[:, 4] >= threshold)]
+        keep_t = torch.stack(keep, dim=0)
+        bboxlist = bboxlist[keep_t, :]
+        bbox_list_above_threshold = torch.nonzero(bboxlist[:, 4] >= threshold)
+        bboxlist = bboxlist[bbox_list_above_threshold].view(-1, 5)
         return bboxlist
 
     @staticmethod
@@ -98,13 +98,19 @@ class SFDDetector(object):
 
         keep = []
         while order.numel() > 0:
-            i = order[0]
-            keep.append(i)
-            xx1, yy1 = torch.maximum(x1[i], x1[order[1:]]), torch.maximum(y1[i], y1[order[1:]])
-            xx2, yy2 = torch.minimum(x2[i], x2[order[1:]]), torch.minimum(y2[i], y2[order[1:]])
+            bb_current = order[0]
+            bb_others = order[1:]
+            keep.append(bb_current)
 
-            w, h = torch.maximum(torch.tensor(0.0), xx2 - xx1 + 1), torch.maximum(torch.tensor(0.0), yy2 - yy1 + 1)
-            ovr = w * h / (areas[i] + areas[order[1:]] - w * h)
+            xx1 = torch.maximum(x1[bb_current], x1[bb_others])
+            yy1 = torch.maximum(y1[bb_current], y1[bb_others])
+            xx2 = torch.minimum(x2[bb_current], x2[bb_others])
+            yy2 = torch.minimum(y2[bb_current], y2[bb_others])
+
+            xx_diff = xx2 - xx1 + 1
+            yy_diff = yy2 - yy1 + 1
+            w, h = torch.maximum(torch.tensor(0.0), xx_diff), torch.maximum(torch.tensor(0.0), yy_diff)
+            ovr = w * h / (areas[bb_current] + areas[bb_others] - w * h)
 
             inds = torch.nonzero(ovr <= thresh).flatten()
             order = order[inds + 1]
@@ -112,27 +118,26 @@ class SFDDetector(object):
         return keep
 
     def detect(self, net, img, device, process_device="cpu"):
-        ten = torch.from_numpy(img) - torch.Tensor([104, 117, 123])
-        ten = ten.permute((2, 0, 1)).float()
-        ten = ten.to(device)
-        ten = ten.unsqueeze(0)
+        img = img - self.__WHITENING
+        img = torch.Tensor(img).float().to(device)
+        img = img.permute((2, 0, 1)).unsqueeze(0)
 
         with torch.no_grad():
-            nn_out = net(ten)
+            nn_out = net(img)
 
-        bboxlist = []
         nn_out = [x.to(process_device) for x in nn_out]
+        oreg_nn = [nn_out[1], nn_out[3], nn_out[5], nn_out[7], nn_out[9], nn_out[11]]
+        ocls_nn = [nn_out[0], nn_out[2], nn_out[4], nn_out[6], nn_out[8], nn_out[10]]
 
-        for i in range(len(nn_out) // 2):
-            ocls = nn_out[i * 2]
+        bboxlist = list()
+        for i, (ocls, oreg) in enumerate(zip(ocls_nn, oreg_nn)):
             ocls = ocls.softmax(dim=1)
-            oreg = nn_out[i * 2 + 1]
             stride = 2 ** (i + 2)
 
             poss = (ocls[:, 1, :, :] > 0.05).nonzero()
-            hindex = poss[:, 1].flatten()
+            hindex = poss[:, 1]
             windex = poss[:, 2]
-            axc = (stride / 2) + (windex * stride)
+            axc = stride / 2 + windex * stride
             ayc = stride / 2 + hindex * stride
             score = ocls[0, 1, hindex, windex]
             loc = oreg[0, :, hindex, windex].T
