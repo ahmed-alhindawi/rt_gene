@@ -10,7 +10,7 @@ More information can be found on the Personal Robotic Lab's website: <https://ww
 
 If you use the code in this repository, please cite:
 
-`
+```
 @inproceedings{al-hindawiFasterBetterBlink2022,
   title = {Faster, Better Blink Detection through Curriculum Learning by Augmentation},
   booktitle = {2022 Symposium on Eye Tracking Research and Applications},
@@ -22,7 +22,7 @@ If you use the code in this repository, please cite:
   location = {New York, NY, USA},
   doi = {10.1145/3517031.3529617},
 }
-`
+```
 
 ## Requirements
 ### Pytorch
