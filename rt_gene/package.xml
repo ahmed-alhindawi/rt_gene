@@ -4,14 +4,9 @@
   <version>4.0.1</version>
   <description>A package implementing head pose estimation and gaze estimation based on the ECCV2018 paper RT-GENE: Real-Time Eye Gaze Estimation in Natural Environments</description>
 
-  <maintainer email="t.fischer@imperial.ac.uk">Tobias Fischer</maintainer>
+  <maintainer email="a.al-hindawi@imperial.ac.uk">Ahmed Al-Hindawi</maintainer>
 
   <license>CC BY-NC-SA 4.0</license>
-
-  <url type="website">https://www.tobiasfischer.info</url>
-
-  <author email="t.fischer@imperial.ac.uk">Tobias Fischer</author>
-  <author email="H.J.Chang@bham.ac.uk">Hyung Jin Chang</author>
 
   <!-- The *_depend tags are used to specify dependencies -->
   <!-- Dependencies can be catkin packages or system dependencies -->

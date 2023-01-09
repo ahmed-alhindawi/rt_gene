@@ -17,7 +17,7 @@ This repository contains a fork of the code for two papers: [RT-GENE (Gaze Estim
 ## RT-GENE (Gaze Estimation)
 
 ### License + Attribution
-The RT-GENE code is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Commercial usage is not permitted. If you use this dataset or the code in a scientific publication, please cite the following [paper](http://openaccess.thecvf.com/content_ECCV_2018/html/Tobias_Fischer_RT-GENE_Real-Time_Eye_ECCV_2018_paper.html):
+The RT-GENE code is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/). Commercial usage is not permitted.
 
 ### Overview + Accompanying Dataset
 The code is split into four parts, each having its own README contained. There is also an accompanying [dataset](https://zenodo.org/record/2529036) [(alternative link)](https://goo.gl/tfUaDm) to the code. For more information, other datasets and more open-source software please visit the Personal Robotic Lab's website: <https://www.imperial.ac.uk/personal-robotics/software/>.
@@ -43,4 +43,5 @@ The [rt_gene_model_training](./rt_gene_model_training) directory allows using th
 
 ## Faster-Better Blink Estimation
 
-Code TBA
+Code for `Faster, Better Blink Classification using Curriculum Learning by Augmentation` is hosted [here](./better_blink_model_training/).
+The repository contains the code required to train and evaluate the neural network on RT-BENE.
