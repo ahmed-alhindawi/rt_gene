@@ -6,7 +6,7 @@ This code is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licens
 
 More information can be found on the Personal Robotic Lab's website: <https://www.imperial.ac.uk/personal-robotics/software/>.
 
-![Paper abstract](./assets/better_blink_abstract.png)
+![Paper abstract](../assets/better_blink_abstract.png)
 
 If you use the code in this repository, please cite:
 
