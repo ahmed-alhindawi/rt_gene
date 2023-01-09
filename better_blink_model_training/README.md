@@ -6,6 +6,24 @@ This code is licensed under [CC BY-NC-SA 4.0](https://creativecommons.org/licens
 
 More information can be found on the Personal Robotic Lab's website: <https://www.imperial.ac.uk/personal-robotics/software/>.
 
+![Paper abstract](./assets/better_blink_abstract.png)
+
+If you use the code in this repository, please cite:
+
+`
+@inproceedings{al-hindawiFasterBetterBlink2022,
+  title = {Faster, Better Blink Detection through Curriculum Learning by Augmentation},
+  booktitle = {2022 Symposium on Eye Tracking Research and Applications},
+  author = {Al-Hindawi, Ahmed and Vizcaychipi, Marcela and Demiris, Yiannis},
+  date = {2022-06-08},
+  series = {ETRA '22},
+  pages = {1--7},
+  publisher = {Association for Computing Machinery},
+  location = {New York, NY, USA},
+  doi = {10.1145/3517031.3529617},
+}
+`
+
 ## Requirements
 ### Pytorch
 For conda users: `conda install -c conda-forge numpy scipy tqdm pillow rospkg opencv scikit-learn h5py matplotlib pytorch-lightning && conda install -c pytorch pytorch torchvision`

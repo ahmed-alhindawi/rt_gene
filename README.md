@@ -43,5 +43,5 @@ The [rt_gene_model_training](./rt_gene_model_training) directory allows using th
 
 ## Faster-Better Blink Estimation
 
-Code for `Faster, Better Blink Classification using Curriculum Learning by Augmentation` is hosted [here](./better_blink_model_training/).
+Code for [Faster, Better Blink Detection using Curriculum Learning by Augmentation](https://dl.acm.org/doi/pdf/10.1145/3517031.3529617) is hosted [here](./better_blink_model_training/).
 The repository contains the code required to train and evaluate the neural network on RT-BENE.
