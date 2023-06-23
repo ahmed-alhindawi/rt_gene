@@ -12,25 +12,28 @@ class GazeEstimationAbstractModel(nn.Module):
     @staticmethod
     def _create_fc_layers(in_features, out_features):
         x_l = nn.Sequential(
-            nn.Linear(in_features, 1024),
-            nn.BatchNorm1d(1024, momentum=0.99, eps=1e-3),
-            nn.ReLU(inplace=True)
+            nn.ReLU(),
+            nn.LayerNorm(in_features),
+            nn.Linear(in_features, 1024)
         )
         x_r = nn.Sequential(
+            nn.ReLU(),
+            nn.LayerNorm(in_features),
             nn.Linear(in_features, 1024),
-            nn.BatchNorm1d(1024, momentum=0.99, eps=1e-3),
-            nn.ReLU(inplace=True)
         )
 
         concat = nn.Sequential(
+            nn.ReLU(),
+            nn.LayerNorm(2048),
             nn.Linear(2048, 512),
-            nn.BatchNorm1d(512, momentum=0.99, eps=1e-3),
-            nn.ReLU(inplace=True)
         )
 
         fc = nn.Sequential(
+            nn.ReLU(),
+            nn.LayerNorm(514),
             nn.Linear(514, 256),
-            nn.ReLU(inplace=True),
+            nn.ReLU(),
+            nn.LayerNorm(256),
             nn.Linear(256, out_features)
         )
 
@@ -66,32 +69,33 @@ class GazeEstimationModelResnet18(GazeEstimationAbstractModel):
 
     def __init__(self, num_out=2):
         super(GazeEstimationModelResnet18, self).__init__()
-        _left_model = models.resnet18(pretrained=True)
-        _right_model = models.resnet18(pretrained=True)
+        left_model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
+        right_model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
 
         # remove the last ConvBRelu layer
         self.left_features = nn.Sequential(
-            _left_model.conv1,
-            _left_model.bn1,
-            _left_model.relu,
-            _left_model.maxpool,
-            _left_model.layer1,
-            _left_model.layer2,
-            _left_model.layer3,
-            _left_model.layer4,
-            _left_model.avgpool
+            left_model.conv1,
+            left_model.bn1,
+            left_model.relu,
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1), stride=(1, 1), bias=False),
+            left_model.layer1,
+            left_model.layer2,
+            left_model.layer3,
+            left_model.layer4,
+            nn.Conv2d(in_channels=512, out_channels=32, kernel_size=(1, 1), stride=(1, 1), bias=False),
         )
+        print(self.left_features)
 
         self.right_features = nn.Sequential(
-            _right_model.conv1,
-            _right_model.bn1,
-            _right_model.relu,
-            _right_model.maxpool,
-            _right_model.layer1,
-            _right_model.layer2,
-            _right_model.layer3,
-            _right_model.layer4,
-            _right_model.avgpool
+            right_model.conv1,
+            right_model.bn1,
+            right_model.relu,
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=(1, 1), stride=(1, 1), bias=False),  # replace the max pooling with a 1x1 convolution
+            right_model.layer1,
+            right_model.layer2,
+            right_model.layer3,
+            right_model.layer4,
+            nn.Conv2d(in_channels=512, out_channels=32, kernel_size=(1, 1), stride=(1, 1), bias=False)  # 1x1 convolution to replace an avgpool
         )
 
         for param in self.left_features.parameters():
@@ -99,7 +103,7 @@ class GazeEstimationModelResnet18(GazeEstimationAbstractModel):
         for param in self.right_features.parameters():
             param.requires_grad = True
 
-        self.xl, self.xr, self.concat, self.fc = GazeEstimationAbstractModel._create_fc_layers(in_features=_left_model.fc.in_features, out_features=num_out)
+        self.xl, self.xr, self.concat, self.fc = GazeEstimationAbstractModel._create_fc_layers(in_features=384, out_features=num_out)
         GazeEstimationAbstractModel._init_weights(self.modules())
 
 
