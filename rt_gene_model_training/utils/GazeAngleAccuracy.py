@@ -1,28 +1,31 @@
-import numpy as np
+import torch
+from torchmetrics import Metric
 
 
-class GazeAngleAccuracy(object):
+class GazeAngleMetric(Metric):
 
-    def __call__(self, batch_y_pred, batch_y_true):
-        batch = batch_y_true.size()[0]
-        batch_y_pred = batch_y_pred.cpu().detach().numpy()
-        batch_y_true = batch_y_true.cpu().detach().numpy()
-        acc = []
-        for i in range(batch):
-            y_true, y_pred = batch_y_true[i], batch_y_pred[i]
-            pred_x = -1 * np.cos(y_pred[0]) * np.sin(y_pred[1])
-            pred_y = -1 * np.sin(y_pred[0])
-            pred_z = -1 * np.cos(y_pred[0]) * np.cos(y_pred[1])
-            pred = np.array([pred_x, pred_y, pred_z])
-            pred = pred / np.linalg.norm(pred)
+    def __init__(self):
+        super().__init__()
+        self.add_state("angle", default=torch.tensor(0.0), dist_reduce_fx="sum")
+        self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
 
-            true_x = -1 * np.cos(y_true[0]) * np.sin(y_true[1])
-            true_y = -1 * np.sin(y_true[0])
-            true_z = -1 * np.cos(y_true[0]) * np.cos(y_true[1])
-            gt = np.array([true_x, true_y, true_z])
-            gt = gt / np.linalg.norm(gt)
+    def update(self, y_pred, y_true):
+        batch_y_pred = y_pred.detach()
+        batch_y_true = y_true.detach()
 
-            acc.append(np.rad2deg(np.arccos(np.dot(pred, gt))))
+        pred_x = -1 * torch.cos(batch_y_pred[:, 0]) * torch.sin(batch_y_pred[:, 1])
+        pred_y = -1 * torch.sin(batch_y_pred[:, 0])
+        pred_z = -1 * torch.cos(batch_y_pred[:, 0]) * torch.cos(batch_y_pred[:, 1])
+        pred_l = torch.sqrt(pred_x ** 2 + pred_y ** 2 + pred_z ** 2)
 
-        acc = np.mean(np.array(acc))
-        return acc
+        true_x = -1 * torch.cos(batch_y_true[:, 0]) * torch.sin(batch_y_true[:, 1])
+        true_y = -1 * torch.sin(batch_y_true[:, 0])
+        true_z = -1 * torch.cos(batch_y_true[:, 0]) * torch.cos(batch_y_true[:, 1])
+        true_l = torch.sqrt(true_x ** 2 + true_y ** 2 + true_z ** 2)
+
+        angle = ((pred_x * true_x + pred_y * true_y + pred_z * true_z) / (pred_l * true_l)).sum()
+        self.angle += angle
+        self.total += y_pred.shape[0]
+
+    def compute(self):
+        return torch.rad2deg(torch.arccos(self.angle / self.total))
