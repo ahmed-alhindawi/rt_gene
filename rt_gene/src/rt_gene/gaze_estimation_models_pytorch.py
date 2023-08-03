@@ -13,24 +13,24 @@ class GazeEstimationAbstractModel(nn.Module):
     def _create_fc_layers(in_features, out_features):
         x_l = nn.Sequential(
             nn.GroupNorm(8, in_features),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(in_features, 1024),
         )
         x_r = nn.Sequential(
             nn.GroupNorm(8, in_features),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(in_features, 1024),
         )
 
         concat = nn.Sequential(
             nn.GroupNorm(8, 2048),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(2048, 512)
         )
 
         fc = nn.Sequential(
             nn.GroupNorm(1, 514),
-            nn.ReLU(),
+            nn.LeakyReLU(),
             nn.Linear(514, 256),
             nn.Tanh(),
             nn.Linear(256, out_features)

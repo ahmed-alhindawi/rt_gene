@@ -1,19 +1,19 @@
-import os
 from argparse import ArgumentParser
+from functools import partial
 
 import pytorch_lightning as pl
 import torch
-from torch.utils.data import DataLoader
 from pytorch_lightning.callbacks import ModelCheckpoint, LearningRateMonitor
+from pytorch_lightning.loggers import WandbLogger
+from torch.utils.data import DataLoader
+from torchmetrics import MetricCollection
+from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 from torchvision.transforms import transforms
 
 from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG
 from rtgene_dataset import RTGENEFileDataset
+from utils.CustomLoss import PinballLoss, LaplacianNLL, EnhancedLogLoss, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
-from torchmetrics import MetricCollection
-from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
-from utils.CustomLoss import PinballLoss, LaplacianNLL, EnhancedLogLoss
-from pytorch_lightning.loggers import WandbLogger
 
 LOSS_FN = {
     "mse": (torch.nn.MSELoss, 2),
@@ -21,12 +21,13 @@ LOSS_FN = {
     "pinball": (PinballLoss, 3),
     "gnll": (torch.nn.GaussianNLLLoss, 3),
     "lnll": (LaplacianNLL, 3),
-    "ell": (EnhancedLogLoss, 2)
+    "ell": (EnhancedLogLoss, 2),
+    "cnll": (partial(CharbonnierNLL, transition=1e-3, slope=1e-2), 3)
 }
 
 MODELS = {
-    "vgg16": GazeEstimationModelVGG,
     "resnet18": GazeEstimationModelResnet18,
+    "vgg16": GazeEstimationModelVGG
 }
 
 
@@ -68,7 +69,7 @@ class TrainRTGENE(pl.LightningModule):
             angular_out = y_pred[:, :2]
             confidence = y_pred[:, 2:]
 
-            if self.hparams.loss_fn == "gnll" or self.hparams.loss_fn == "lnll":
+            if self.hparams.loss_fn != "pinball":
                 confidence = torch.exp(confidence)
 
             loss = self._criterion(angular_out, y_true, confidence)
@@ -103,8 +104,8 @@ class TrainRTGENE(pl.LightningModule):
 
     def configure_optimizers(self):
         params_to_update = [param for name, param in self.model.named_parameters()]
-        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate)
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=90, gamma=0.5)
+        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate, weight_decay=1e-5)
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[90, 180, 270], gamma=0.5)
         return [optimizer], [scheduler]
 
     @staticmethod
@@ -112,7 +113,7 @@ class TrainRTGENE(pl.LightningModule):
         parser = ArgumentParser(parents=[parent_parser])
         parser.add_argument('--loss_fn', choices=list(LOSS_FN.keys()), default=list(LOSS_FN.keys())[0])
         parser.add_argument('--batch_size', default=128, type=int)
-        parser.add_argument('--learning_rate', type=float, default=0.0003)
+        parser.add_argument('--learning_rate', type=float, default=0.01)
         parser.add_argument('--model_base', choices=list(MODELS.keys()), default=list(MODELS.keys())[0])
         return parser
 

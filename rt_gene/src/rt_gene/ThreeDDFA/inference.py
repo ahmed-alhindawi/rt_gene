@@ -26,7 +26,7 @@ SOFTWARE.
 import numpy as np
 from math import sqrt
 from .ddfa import reconstruct_vertex
-
+import torch
 
 def get_suffix(filename):
     """a.jpg -> jpg"""
@@ -39,31 +39,28 @@ def get_suffix(filename):
 def crop_img(img, roi_box):
     h, w = img.shape[:2]
 
-    sx, sy, ex, ey = [int(round(_)) for _ in roi_box]
+    sx, sy, ex, ey = [int(np.array(x).round()) for x in roi_box]
     dh, dw = ey - sy, ex - sx
     if len(img.shape) == 3:
         res = np.zeros((dh, dw, 3), dtype=np.uint8)
     else:
         res = np.zeros((dh, dw), dtype=np.uint8)
+
+    dsx = 0
     if sx < 0:
         sx, dsx = 0, -sx
-    else:
-        dsx = 0
 
+    dex = dw
     if ex > w:
         ex, dex = w, dw - (ex - w)
-    else:
-        dex = dw
 
+    dsy = 0
     if sy < 0:
         sy, dsy = 0, -sy
-    else:
-        dsy = 0
 
+    dey = dh
     if ey > h:
         ey, dey = h, dh - (ey - h)
-    else:
-        dey = dh
 
     res[dsy:dey, dsx:dex] = img[sy:ey, sx:ex]
     return res
@@ -112,10 +109,26 @@ def parse_roi_box_from_bbox(bbox):
     return roi_box
 
 
+def parse_roi_box_from_bbox2(bbox):
+    left, top, right, bottom = bbox
+    width = right - left
+    height = bottom - top
+    old_size = (width + height) / 2
+    center_x = right - width / 2.0
+    center_y = bottom - height / 2.0 + old_size * 0.14
+    size = old_size * 1.58
+    roi_box = [0] * 4
+    roi_box[0] = center_x - size / 2
+    roi_box[1] = center_y - size / 2
+    roi_box[2] = roi_box[0] + size
+    roi_box[3] = roi_box[1] + size
+    return roi_box
+
+
 def _predict_vertices(param, roi_bbox, dense):
     from .params import std_size
     vertex = reconstruct_vertex(param, dense=dense)
-    sx, sy, ex, ey = roi_bbox
+    sx, sy, ex, ey = [np.array(bbox) for bbox in roi_bbox]
     scale_x = (ex - sx) / std_size
     scale_y = (ey - sy) / std_size
     vertex[0, :] = vertex[0, :] * scale_x + sx

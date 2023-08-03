@@ -61,9 +61,11 @@ def reconstruct_vertex(param, whitening=True, dense=False, transform=True):
         vertex = np.matmul(p, (u + t1 + t2).reshape(3, -1, order='F')) + offset
     else:
         """For 68 pts"""
-        t1 = np.dot(w_shp_base, alpha_shp)
-        t2 = np.dot(w_exp_base, alpha_exp)
-        vertex = np.matmul(p, (u_base + t1 + t2).reshape(3, -1, order='F')) + offset
+        t1 = np.matmul(w_shp_base, alpha_shp)
+        t2 = np.matmul(w_exp_base, alpha_exp)
+        t3 = (u_base + t1 + t2).reshape(3, -1, order='F')
+        t4 = np.matmul(p, t3)
+        vertex = t4 + offset
 
     if transform:
         # transform to image coordinate space

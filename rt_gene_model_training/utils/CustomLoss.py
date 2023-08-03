@@ -52,7 +52,7 @@ class LaplacianNLL(nn.Module):
     def forward(self, y_pred, y_true, scale):
         log_s = torch.log(2 * scale)
         mae = torch.abs(y_true - y_pred)
-        loss = log_s + (mae/scale)
+        loss = log_s + (mae / scale)
 
         return self._reduction_strategy(loss)
 
@@ -109,8 +109,26 @@ class EnhancedLogLoss(nn.Module):
         self._reduction_strategy(losses)
 
 
-if __name__ == "__main__":
-    t1 = torch.rand((16, 3))
-    t2 = t1.clone()[:, :2]
-    loss = LaplacianNLL()
-    print(loss(t1[:, :2], t2, t1[:, 2:]))
+class CharbonnierNLL(nn.Module):
+
+    def __init__(self, reduction="mean", slope=1.0, transition=1.0 / 224):
+        super().__init__()
+        self._slope = slope
+        self._transition = transition
+
+        match reduction:
+            case "mean":
+                self._reduction = lambda x: torch.mean(x)
+            case "sum":
+                self._reduction = lambda x: torch.sum(x)
+            case "none":
+                self._reduction = lambda x: x
+            case _:
+                raise ValueError(f"Unknown reduction {reduction}")
+
+    def forward(self, y_pred, y_truth, scale):
+        diff = y_truth - y_pred
+        loss = (self._slope ** 2) * (torch.sqrt((diff / torch.tensor(self._slope)) ** 2 + self._transition) - torch.sqrt(torch.tensor(self._transition)))
+        log_loss_var = 0.5 * torch.log(scale) + loss / scale
+
+        return self._reduction(log_loss_var)
