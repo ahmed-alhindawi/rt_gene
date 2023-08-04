@@ -8,10 +8,9 @@ from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 from torchmetrics import MetricCollection
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
-from torchvision.transforms import transforms
 
-from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG
-from rtgene_dataset import RTGENEFileDataset
+from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG, GazeEstimationModelResnet18Uncertainty
+from rtgene_dataset import RTGENECrossSubjectFileDataset, RTGENEWithinSubjectFileDataset
 from utils.CustomLoss import PinballLoss, LaplacianNLL, EnhancedLogLoss, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
 
@@ -21,19 +20,19 @@ LOSS_FN = {
     "pinball": (PinballLoss, 3),
     "gnll": (torch.nn.GaussianNLLLoss, 3),
     "lnll": (LaplacianNLL, 3),
-    "ell": (EnhancedLogLoss, 2),
     "cnll": (partial(CharbonnierNLL, transition=1e-3, slope=1e-2), 3)
 }
 
 MODELS = {
     "resnet18": GazeEstimationModelResnet18,
+    "resnet18_uncertainty": GazeEstimationModelResnet18Uncertainty,
     "vgg16": GazeEstimationModelVGG
 }
 
 
 class TrainRTGENE(pl.LightningModule):
 
-    def __init__(self, hparams, train_subjects, validate_subjects):
+    def __init__(self, hparams):
         super(TrainRTGENE, self).__init__()
         loss_fn, num_out = LOSS_FN.get(hparams.loss_fn)
 
@@ -50,8 +49,6 @@ class TrainRTGENE(pl.LightningModule):
             MeanAbsoluteError(),
             GazeAngleMetric()
         ])
-        self._train_subjects = train_subjects
-        self._validate_subjects = validate_subjects
         self.save_hyperparameters(hparams)
 
     def forward(self, left_patch, right_patch, head_pose):
@@ -61,19 +58,19 @@ class TrainRTGENE(pl.LightningModule):
         left_patch, right_patch, headpose_label, y_true = batch
 
         y_pred = self.forward(left_patch, right_patch, headpose_label)
-        angle_acc = metric(y_pred[:, :2], y_true)
+        angle_out = y_pred[:, :2]
+        angle_acc = metric(angle_out, y_true)
 
         if self.loss_num_out == 2:
             loss = self._criterion(y_pred, y_true)
         elif self.loss_num_out == 3:
-            angular_out = y_pred[:, :2]
-            confidence = y_pred[:, 2:]
+            variance = y_pred[:, 2]
 
             if self.hparams.loss_fn != "pinball":
-                confidence = torch.exp(confidence)
+                variance = torch.exp(variance)
 
-            loss = self._criterion(angular_out, y_true, confidence)
-            angle_acc["confidence"] = confidence.mean()
+            loss = self._criterion(angle_out, y_true, variance)
+            angle_acc["variance"] = variance.mean()
         else:
             raise ValueError(f"Number out isn't right ({self.loss_num_out}) or unknown loss function {self.hparams.loss_fn}")
 
@@ -91,20 +88,16 @@ class TrainRTGENE(pl.LightningModule):
         return results["loss"]
 
     def train_dataloader(self):
-        train_transforms = transforms.Compose([transforms.RandomResizedCrop(size=(36, 120), scale=(0.8, 1.2), interpolation=transforms.InterpolationMode.NEAREST, antialias=False),
-                                               transforms.RandomGrayscale(p=0.1),
-                                               transforms.ColorJitter(brightness=0.5, hue=0.2, contrast=0.5, saturation=0.5),
-                                               transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-        dataset = RTGENEFileDataset(root_path=self.hparams.dataset_path, subject_list=self._train_subjects, transform=train_transforms)
+        dataset = RTGENEWithinSubjectFileDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectFileDataset.TrainingPhase.Training, fraction=0.90)
         return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def val_dataloader(self):
-        dataset = RTGENEFileDataset(root_path=self.hparams.dataset_path, subject_list=self._validate_subjects, transform=None)
+        dataset = RTGENEWithinSubjectFileDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectFileDataset.TrainingPhase.Validation, fraction=0.10)
         return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def configure_optimizers(self):
         params_to_update = [param for name, param in self.model.named_parameters()]
-        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate, weight_decay=1e-5)
+        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[90, 180, 270], gamma=0.5)
         return [optimizer], [scheduler]
 
@@ -133,41 +126,19 @@ if __name__ == "__main__":
 
     pl.seed_everything(hyperparams.seed)
 
-    train_subjects = []
-    valid_subjects = []
-    test_subjects = []
-    if hyperparams.k_fold_validation:
-        train_subjects.append([1, 2, 8, 10, 3, 4, 7, 9])
-        train_subjects.append([1, 2, 8, 10, 5, 6, 11, 12, 13])
-        train_subjects.append([3, 4, 7, 9, 5, 6, 11, 12, 13])
-        # validation set is always subjects 14, 15 and 16
-        valid_subjects.append([0, 14, 15, 16])
-        valid_subjects.append([0, 14, 15, 16])
-        valid_subjects.append([0, 14, 15, 16])
-        # test subjects
-        test_subjects.append([5, 6, 11, 12, 13])
-        test_subjects.append([3, 4, 7, 9])
-        test_subjects.append([1, 2, 8, 10])
-    else:
-        train_subjects.append([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
-        valid_subjects.append([0])  # Note that this is a hack and should not be used to get results for papers
-        test_subjects.append([0])
-
-    wandb_logger = WandbLogger(project='gaze_regression')
+    wandb_logger = WandbLogger(project='gaze_regression', log_model=True)
     wandb_logger.experiment.config.update(vars(hyperparams))  # extend the wandb logger config with the hyperparameters
 
-    for fold, (train_s, valid_s, _) in enumerate(zip(train_subjects, valid_subjects, test_subjects)):
-        model = TrainRTGENE(hparams=hyperparams, train_subjects=train_s, validate_subjects=valid_s)
-        checkpoint_callback = ModelCheckpoint(monitor='val_loss', mode='min', verbose=False, save_top_k=5)
-        lr_callback = LearningRateMonitor()
+    model = TrainRTGENE(hparams=hyperparams)
+    checkpoint_callback = ModelCheckpoint(monitor='val_loss', mode='min', verbose=False, save_top_k=5)
+    lr_callback = LearningRateMonitor()
 
-        # start training
-        trainer = pl.Trainer(accelerator="gpu",
-                             devices="auto",
-                             log_every_n_steps=10,
-                             precision=32,
-                             callbacks=[checkpoint_callback, lr_callback],
-                             min_epochs=hyperparams.min_epochs,
-                             max_epochs=hyperparams.max_epochs,
-                             logger=wandb_logger)
-        trainer.fit(model)
+    # start training
+    trainer = pl.Trainer(accelerator="gpu",
+                         devices="auto",
+                         precision=32,
+                         callbacks=[checkpoint_callback, lr_callback],
+                         min_epochs=hyperparams.min_epochs,
+                         max_epochs=hyperparams.max_epochs,
+                         logger=wandb_logger)
+    trainer.fit(model)

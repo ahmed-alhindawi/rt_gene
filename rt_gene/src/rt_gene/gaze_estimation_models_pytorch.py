@@ -10,6 +10,33 @@ class GazeEstimationAbstractModel(nn.Module):
         super(GazeEstimationAbstractModel, self).__init__()
 
     @staticmethod
+    def _create_fc_layers_uncertainty(in_features, out_features):
+        x_l = nn.Sequential(
+            nn.LayerNorm(in_features + 2),
+            nn.GELU(),
+            nn.Linear(in_features + 2, 1024),
+            nn.GroupNorm(8, 1024),
+            nn.ELU(),
+            nn.Linear(1024, 256),
+            nn.GroupNorm(8, 256),
+            nn.ELU(),
+            nn.Linear(256, out_features)
+        )
+        x_r = nn.Sequential(
+            nn.LayerNorm(in_features + 2),
+            nn.GELU(),
+            nn.Linear(in_features + 2, 1024),
+            nn.GroupNorm(8, 1024),
+            nn.ELU(),
+            nn.Linear(1024, 256),
+            nn.GroupNorm(8, 256),
+            nn.ELU(),
+            nn.Linear(256, out_features)
+        )
+
+        return x_r, x_l
+
+    @staticmethod
     def _create_fc_layers(in_features, out_features):
         x_l = nn.Sequential(
             nn.GroupNorm(8, in_features),
@@ -95,6 +122,66 @@ class GazeEstimationModelResnet18(GazeEstimationAbstractModel):
             param.requires_grad = True
 
         self.xl, self.xr, self.concat, self.fc = GazeEstimationAbstractModel._create_fc_layers(in_features=left_model.fc.in_features, out_features=num_out)
+
+
+class GazeEstimationModelResnet18Uncertainty(GazeEstimationAbstractModel):
+
+    def __init__(self, num_out=3):
+        super(GazeEstimationModelResnet18Uncertainty, self).__init__()
+        left_model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+        right_model = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
+
+        # remove the last ConvBRelu layer
+        self.left_features = nn.Sequential(
+            left_model.conv1,
+            left_model.bn1,
+            left_model.relu,
+            left_model.maxpool,
+            left_model.layer1,
+            left_model.layer2,
+            left_model.layer3,
+            left_model.layer4,
+            left_model.avgpool
+        )
+
+        self.right_features = nn.Sequential(
+            right_model.conv1,
+            right_model.bn1,
+            right_model.relu,
+            right_model.maxpool,
+            right_model.layer1,
+            right_model.layer2,
+            right_model.layer3,
+            right_model.layer4,
+            right_model.avgpool
+        )
+
+        for param in self.left_features.parameters():
+            param.requires_grad = True
+        for param in self.right_features.parameters():
+            param.requires_grad = True
+
+        self.xl, self.xr = GazeEstimationAbstractModel._create_fc_layers_uncertainty(in_features=left_model.fc.in_features, out_features=num_out)
+
+    def forward(self, left_patch, right_patch, headpose):
+        left_x = self.left_features(left_patch)
+        left_x = torch.flatten(left_x, 1)
+        left_x = torch.cat((left_x, headpose), dim=1)
+        left_x = self.xl(left_x)
+
+        right_x = self.right_features(right_patch)
+        right_x = torch.flatten(right_x, 1)
+        right_x = torch.cat((right_x, headpose), dim=1)
+        right_x = self.xl(right_x)
+
+        left_x[..., 2] = torch.exp(left_x[..., 2])
+        right_x[..., 2] = torch.exp(right_x[..., 2])
+
+        # combine the results of the left & right outputs under an IVW scheme
+        sum_variances = (1.0/(1.0 / left_x[..., 2] + right_x[..., 2])).view(-1, 1)
+        estimate = ((left_x[..., :2] / left_x[..., 2].view(-1, 1)) + (right_x[..., :2] / right_x[..., 2].view(-1, 1))) * sum_variances
+        estimate = torch.concat((estimate, torch.log(sum_variances)), dim=-1)
+        return estimate
 
 
 class GazeEstimationModelPreactResnet(GazeEstimationAbstractModel):

@@ -28,4 +28,4 @@ class GazeAngleMetric(Metric):
         self.total += y_pred.shape[0]
 
     def compute(self):
-        return torch.rad2deg(torch.arccos(self.angle / self.total))
+        return torch.rad2deg(torch.arccos(torch.clip(self.angle / self.total, -1, +1)))
