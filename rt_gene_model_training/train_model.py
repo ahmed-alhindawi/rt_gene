@@ -9,9 +9,9 @@ from torch.utils.data import DataLoader
 from torchmetrics import MetricCollection
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 
-from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG, GazeEstimationModelResnet18Uncertainty
-from rtgene_dataset import RTGENECrossSubjectFileDataset, RTGENEWithinSubjectFileDataset
-from utils.CustomLoss import PinballLoss, LaplacianNLL, EnhancedLogLoss, CharbonnierNLL
+from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG, GazeEstimationModelResnet18Uncertainty, GazeEstimationModelVGGUncertainty
+from rtgene_dataset import RTGENEWithinSubjectFileDataset
+from utils.CustomLoss import PinballLoss, LaplacianNLL, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
 
 LOSS_FN = {
@@ -26,7 +26,8 @@ LOSS_FN = {
 MODELS = {
     "resnet18": GazeEstimationModelResnet18,
     "resnet18_uncertainty": GazeEstimationModelResnet18Uncertainty,
-    "vgg16": GazeEstimationModelVGG
+    "vgg16": GazeEstimationModelVGG,
+    "vgg16_uncertainty": GazeEstimationModelVGGUncertainty
 }
 
 
