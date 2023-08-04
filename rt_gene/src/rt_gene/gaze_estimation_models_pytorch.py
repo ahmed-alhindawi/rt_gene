@@ -192,6 +192,49 @@ class GazeEstimationModelResnet18Uncertainty(GazeEstimationAbstractModel):
         return self.forward_with_uncertainty(left_patch, right_patch, headpose, self.left_features, self.xl, self.right_features, self.xr)
 
 
+class GazeEstimationModelResnet50Uncertainty(GazeEstimationAbstractModel):
+
+    def __init__(self, num_out=3):
+        super(GazeEstimationModelResnet50Uncertainty, self).__init__()
+        left_model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        right_model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+
+        # remove the last ConvBRelu layer
+        self.left_features = nn.Sequential(
+            left_model.conv1,
+            left_model.bn1,
+            left_model.relu,
+            left_model.maxpool,
+            left_model.layer1,
+            left_model.layer2,
+            left_model.layer3,
+            left_model.layer4,
+            left_model.avgpool
+        )
+
+        self.right_features = nn.Sequential(
+            right_model.conv1,
+            right_model.bn1,
+            right_model.relu,
+            right_model.maxpool,
+            right_model.layer1,
+            right_model.layer2,
+            right_model.layer3,
+            right_model.layer4,
+            right_model.avgpool
+        )
+
+        for param in self.left_features.parameters():
+            param.requires_grad = True
+        for param in self.right_features.parameters():
+            param.requires_grad = True
+
+        self.xl, self.xr = GazeEstimationAbstractModel._create_fc_layers_uncertainty(in_features=left_model.fc.in_features, out_features=num_out)
+
+    def forward(self, left_patch, right_patch, headpose):
+        return self.forward_with_uncertainty(left_patch, right_patch, headpose, self.left_features, self.xl, self.right_features, self.xr)
+
+
 class GazeEstimationModelVGG(GazeEstimationAbstractModel):
 
     def __init__(self, num_out=2):
