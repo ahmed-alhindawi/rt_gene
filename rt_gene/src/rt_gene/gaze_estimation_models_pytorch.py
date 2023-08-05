@@ -1,7 +1,9 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torchvision import models
+import timm
+from enum import Enum
+from torch import Tensor
 
 
 class GazeEstimationAbstractModel(nn.Module):
@@ -287,3 +289,29 @@ class GazeEstimationModelVGGUncertainty(GazeEstimationAbstractModel):
 
     def forward(self, left, right, headpose):
         return self.forward_with_uncertainty(left, right, headpose, self.left_features, self.xl, self.right_features, self.xr)
+
+
+class GazeEstimationModelResnet18SingleEye(nn.Module):
+
+    class ResNetBackbone(Enum):
+        Resnet18 = "resnet18"
+        Resnet34 = "resnet34"
+        Resnet50 = "resnet50"
+        Resnet101 = "resnet101"
+
+    def __init__(self, backbone=ResNetBackbone.Resnet18, num_out: int = 2):
+        super().__init__()
+        backbone = timm.create_model(backbone.value, pretrained=True, num_classes=0)
+
+        self.model = nn.Sequential(backbone,
+                                   nn.GroupNorm(8, backbone.num_features),
+                                   nn.GELU(),
+                                   nn.Linear(backbone.num_features, backbone.num_features),
+                                   nn.GroupNorm(8, backbone.num_features),
+                                   nn.ELU(),
+                                   nn.Linear(backbone.num_features, num_out),
+                                   )
+
+    def forward(self, imgs: Tensor) -> Tensor:
+        x = self.model(imgs)
+        return x

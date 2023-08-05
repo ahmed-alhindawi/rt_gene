@@ -10,7 +10,7 @@ from torchmetrics import MetricCollection
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 
 from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG, GazeEstimationModelResnet18Uncertainty, GazeEstimationModelVGGUncertainty, \
-    GazeEstimationModelResnet50Uncertainty
+    GazeEstimationModelResnet50Uncertainty,GazeEstimationModelResnet18SingleEye
 from rtgene_dataset import RTGENEWithinSubjectFileDataset
 from utils.CustomLoss import PinballLoss, LaplacianNLL, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
@@ -29,7 +29,8 @@ MODELS = {
     "resnet18_uncertainty": GazeEstimationModelResnet18Uncertainty,
     "vgg16": GazeEstimationModelVGG,
     "vgg16_uncertainty": GazeEstimationModelVGGUncertainty,
-    "resnet50_uncertainty": GazeEstimationModelResnet50Uncertainty
+    "resnet50_uncertainty": GazeEstimationModelResnet50Uncertainty,
+    "resnet18_single_eye": GazeEstimationModelResnet18SingleEye
 }
 
 
@@ -54,13 +55,47 @@ class TrainRTGENE(pl.LightningModule):
         ])
         self.save_hyperparameters(hparams)
 
-    def forward(self, left_patch, right_patch, head_pose):
-        return self.model(left_patch, right_patch, head_pose)
+    def forward(self, inputs):
+        return self.model(*inputs)
+
+    def shared_step_single_eye(self, batch, metric):
+        left_patch, right_patch, _, y_true = batch
+
+        left_x = self.forward([left_patch])
+        right_x = self.forward([right_patch])
+
+        # take the mean of those two
+        left_x[..., 2] = torch.exp(left_x[..., 2])
+        right_x[..., 2] = torch.exp(right_x[..., 2])
+
+        # combine the results of the left & right outputs under an IVW scheme
+        sum_variances = (1.0 / (1.0 / left_x[..., 2] + right_x[..., 2])).view(-1, 1)
+        y_pred = ((left_x[..., :2] / left_x[..., 2].view(-1, 1)) + (right_x[..., :2] / right_x[..., 2].view(-1, 1))) * sum_variances
+        y_pred = torch.concat((y_pred, torch.log(sum_variances)), dim=-1)
+
+        angle_out = y_pred[:, :2]
+        angle_acc = metric(angle_out, y_true)
+
+        if self.loss_num_out == 2:
+            loss = self._criterion(angle_out, y_true)
+        elif self.loss_num_out == 3:
+            variance = y_pred[:, 2]
+
+            if self.hparams.loss_fn != "pinball":
+                variance = torch.exp(variance)
+
+            loss = self._criterion(angle_out, y_true, variance)
+            angle_acc["variance"] = variance.mean()
+        else:
+            raise ValueError(f"Number out isn't right ({self.loss_num_out}) or unknown loss function {self.hparams.loss_fn}")
+
+        angle_acc["loss"] = loss
+        return angle_acc
 
     def shared_step(self, batch, metric):
         left_patch, right_patch, headpose_label, y_true = batch
 
-        y_pred = self.forward(left_patch, right_patch, headpose_label)
+        y_pred = self.forward((left_patch, right_patch, headpose_label))
         angle_out = y_pred[:, :2]
         angle_acc = metric(angle_out, y_true)
 
@@ -81,12 +116,12 @@ class TrainRTGENE(pl.LightningModule):
         return angle_acc
 
     def training_step(self, batch, batch_idx):
-        results = self.shared_step(batch, self._train_metrics)
+        results = self.shared_step_single_eye(batch, self._train_metrics)
         self.log_dict({f"train_{k}": v for k, v in results.items()})
         return results["loss"]
 
     def validation_step(self, batch, batch_idx):
-        results = self.shared_step(batch, self._val_metrics)
+        results = self.shared_step_single_eye(batch, self._val_metrics)
         self.log_dict({f"val_{k}": v for k, v in results.items()})
         return results["loss"]
 
@@ -118,11 +153,8 @@ if __name__ == "__main__":
     root_parser = ArgumentParser(add_help=False)
     root_parser.add_argument('--dataset_path', type=str, required=True)
     root_parser.add_argument('--num_io_workers', default=8, type=int)
-    root_parser.add_argument('--k_fold_validation', action="store_true", dest="k_fold_validation")
     root_parser.add_argument('--seed', type=int, default=0)
-    root_parser.add_argument('--min_epochs', type=int, default=5, help="Number of Epochs to perform at a minimum")
-    root_parser.add_argument('--max_epochs', type=int, default=20, help="Maximum number of epochs to perform; the trainer will Exit after.")
-    root_parser.set_defaults(k_fold_validation=False)
+    root_parser.add_argument('--max_epochs', type=int, default=200, help="Maximum number of epochs to perform; the trainer will Exit after.")
 
     model_parser = TrainRTGENE.add_model_specific_args(root_parser)
     hyperparams = model_parser.parse_args()
@@ -135,13 +167,14 @@ if __name__ == "__main__":
     model = TrainRTGENE(hparams=hyperparams)
     checkpoint_callback = ModelCheckpoint(monitor='val_loss', mode='min', verbose=False, save_top_k=5)
     lr_callback = LearningRateMonitor()
+    
+    torch.set_float32_matmul_precision('high')
 
     # start training
     trainer = pl.Trainer(accelerator="gpu",
                          devices="auto",
                          precision=32,
                          callbacks=[checkpoint_callback, lr_callback],
-                         min_epochs=hyperparams.min_epochs,
                          max_epochs=hyperparams.max_epochs,
                          logger=wandb_logger)
     trainer.fit(model)

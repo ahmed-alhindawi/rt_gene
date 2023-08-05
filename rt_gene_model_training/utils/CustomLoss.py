@@ -50,9 +50,9 @@ class LaplacianNLL(nn.Module):
         self._reduction_strategy = _reduction_strategies.get(reduction)
 
     def forward(self, y_pred, y_true, scale):
-        log_s = torch.log(2 * scale)
+        log_s = torch.log(2 * scale).view(-1, 1)
         mae = torch.abs(y_true - y_pred)
-        loss = log_s + (mae / scale)
+        loss = log_s + (mae / scale.view(-1, 1))
 
         return self._reduction_strategy(loss)
 
@@ -111,7 +111,7 @@ class EnhancedLogLoss(nn.Module):
 
 class CharbonnierNLL(nn.Module):
 
-    def __init__(self, reduction="mean", slope=1.0, transition=1.0 / 224):
+    def __init__(self, reduction="mean", slope=0.001, transition=1.0 / 512):
         super().__init__()
         self._slope = slope
         self._transition = transition
@@ -129,6 +129,13 @@ class CharbonnierNLL(nn.Module):
     def forward(self, y_pred, y_truth, scale):
         diff = y_truth - y_pred
         loss = (self._slope ** 2) * (torch.sqrt((diff / torch.tensor(self._slope)) ** 2 + self._transition) - torch.sqrt(torch.tensor(self._transition)))
-        log_loss_var = 0.5 * torch.log(scale) + loss / scale
+        log_loss_var = 0.5 * torch.log(scale).view(-1, 1) + loss / scale.view(-1, 1)
 
         return self._reduction(log_loss_var)
+
+
+if __name__ == "__main__":
+    t1 = torch.rand(16, 2)
+    t2 = torch.rand(16, 3)
+    loss = CharbonnierNLL()
+    print(loss(t2[:, :2], t1, t2[:, 2]))
