@@ -1,3 +1,4 @@
+import os
 from argparse import ArgumentParser
 from functools import partial
 
@@ -9,27 +10,19 @@ from torch.utils.data import DataLoader
 from torchmetrics import MetricCollection
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 
-from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG, GazeEstimationModelResnet18Uncertainty, GazeEstimationModelVGGUncertainty, \
-    GazeEstimationModelResnet50Uncertainty
-from datasets.RTGENEDataset import RTGENEWithinSubjectDataset
-from utils.CustomLoss import PinballLoss, LaplacianNLL, CharbonnierNLL
+from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18SingleEye
+from datasets import RTGENEWithinSubjectDataset, MPIIWithinSubjectDataset, TrainingPhase
+from utils.CustomLoss import LaplacianNLL, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
 
 LOSS_FN = {
-    "mse": (torch.nn.MSELoss, 2),
-    "mae": (torch.nn.L1Loss, 2),
-    "pinball": (PinballLoss, 3),
     "gnll": (torch.nn.GaussianNLLLoss, 3),
     "lnll": (LaplacianNLL, 3),
     "cnll": (partial(CharbonnierNLL, transition=1e-3, slope=1e-2), 3)
 }
 
 MODELS = {
-    "resnet18": GazeEstimationModelResnet18,
-    "resnet18_uncertainty": GazeEstimationModelResnet18Uncertainty,
-    "vgg16": GazeEstimationModelVGG,
-    "vgg16_uncertainty": GazeEstimationModelVGGUncertainty,
-    "resnet50_uncertainty": GazeEstimationModelResnet50Uncertainty,
+    "resnet18": GazeEstimationModelResnet18SingleEye
 }
 
 
@@ -58,20 +51,28 @@ class TrainRTGENE(pl.LightningModule):
         return self.model(*inputs)
 
     def shared_step(self, batch, metric):
-        left_patch, right_patch, headpose_label, y_true = batch
+        left_patch, right_patch, _, y_true = batch
 
-        y_pred = self.forward((left_patch, right_patch, headpose_label))
+        left_x = self.forward([left_patch])
+        right_x = self.forward([right_patch])
+
+        # take the mean of those two
+        left_x[..., 2] = torch.exp(left_x[..., 2])
+        right_x[..., 2] = torch.exp(right_x[..., 2])
+
+        # combine the results of the left & right outputs under an IVW scheme
+        sum_variances = (1.0 / (1.0 / left_x[..., 2] + right_x[..., 2])).view(-1, 1)
+        y_pred = ((left_x[..., :2] / left_x[..., 2].view(-1, 1)) + (right_x[..., :2] / right_x[..., 2].view(-1, 1))) * sum_variances
+        y_pred = torch.concat((y_pred, torch.log(sum_variances)), dim=-1)
+
         angle_out = y_pred[:, :2]
         angle_acc = metric(angle_out, y_true)
 
         if self.loss_num_out == 2:
-            loss = self._criterion(y_pred, y_true)
+            loss = self._criterion(angle_out, y_true)
         elif self.loss_num_out == 3:
             variance = y_pred[:, 2]
-
-            if self.hparams.loss_fn != "pinball":
-                variance = torch.exp(variance)
-
+            variance = torch.exp(variance)
             loss = self._criterion(angle_out, y_true, variance)
             angle_acc["variance"] = variance.mean()
         else:
@@ -91,17 +92,27 @@ class TrainRTGENE(pl.LightningModule):
         return results["loss"]
 
     def train_dataloader(self):
-        dataset = RTGENEWithinSubjectDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectDataset.TrainingPhase.Training, fraction=0.90)
-        return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
+        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt_gene/"), phase=TrainingPhase.Training, fraction=0.95)
+        mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Training, fraction=0.95)
+        ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
+        return DataLoader(ds, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def val_dataloader(self):
-        dataset = RTGENEWithinSubjectDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectDataset.TrainingPhase.Validation, fraction=0.10)
-        return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
+        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt_gene/"), phase=TrainingPhase.Validation, fraction=0.05)
+        mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Validation, fraction=0.05)
+        ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
+        return DataLoader(ds, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def configure_optimizers(self):
         params_to_update = [param for name, param in self.model.named_parameters()]
-        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[90, 180, 270], gamma=0.5)
+        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate, weight_decay=1e-4)
+
+        train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, self.hparams.max_epochs - self.hparams.warmup_epochs)
+        warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda current_step: 1 / (10 ** (float(self.hparams.warmup_epochs - current_step))))
+        constant_scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, 1.0, self.hparams.warmup_epochs)
+
+        scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [constant_scheduler, train_scheduler], [self.hparams.warmup_epochs])
+
         return [optimizer], [scheduler]
 
     @staticmethod
@@ -119,6 +130,7 @@ if __name__ == "__main__":
     root_parser.add_argument('--dataset_path', type=str, required=True)
     root_parser.add_argument('--num_io_workers', default=8, type=int)
     root_parser.add_argument('--seed', type=int, default=0)
+    root_parser.add_argument('--warmup_epochs', type=int, default=10)
     root_parser.add_argument('--max_epochs', type=int, default=200, help="Maximum number of epochs to perform; the trainer will Exit after.")
 
     model_parser = TrainRTGENE.add_model_specific_args(root_parser)
