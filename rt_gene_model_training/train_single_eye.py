@@ -16,9 +16,11 @@ from utils.CustomLoss import LaplacianNLL, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
 
 LOSS_FN = {
-    "gnll": (torch.nn.GaussianNLLLoss, 3),
-    "lnll": (LaplacianNLL, 3),
-    "cnll": (partial(CharbonnierNLL, transition=1e-3, slope=1e-2), 3)
+    "mse": (torch.nn.MSELoss, 4),
+    "mae": (torch.nn.L1Loss, 4),
+    "gnll": (torch.nn.GaussianNLLLoss, 5),
+    "lnll": (LaplacianNLL, 5),
+    "cnll": (partial(CharbonnierNLL, transition=1e-3, slope=1), 5)
 }
 
 MODELS = {
@@ -56,27 +58,27 @@ class TrainRTGENE(pl.LightningModule):
         left_x = self.forward([left_patch])
         right_x = self.forward([right_patch])
 
-        # take the mean of those two
-        left_x[..., 2] = torch.exp(left_x[..., 2])
-        right_x[..., 2] = torch.exp(right_x[..., 2])
+        left_x_angle = torch.concat((torch.arctan2(left_x[..., 0], left_x[..., 1]).view(-1, 1), torch.arctan2(left_x[..., 2], left_x[..., 3]).view(-1, 1)), dim=1)
+        right_x_angle = torch.concat((torch.arctan2(right_x[..., 0], right_x[..., 1]).view(-1, 1), torch.arctan2(right_x[..., 2], right_x[..., 3]).view(-1, 1)), dim=1)
 
-        # combine the results of the left & right outputs under an IVW scheme
-        sum_variances = (1.0 / (1.0 / left_x[..., 2] + right_x[..., 2])).view(-1, 1)
-        y_pred = ((left_x[..., :2] / left_x[..., 2].view(-1, 1)) + (right_x[..., :2] / right_x[..., 2].view(-1, 1))) * sum_variances
-        y_pred = torch.concat((y_pred, torch.log(sum_variances)), dim=-1)
+        angle_acc = dict()
+        if self.loss_num_out == 5:
+            # take the mean of those two
+            left_x_var = torch.exp(left_x[..., 4]).view(-1, 1)
+            right_x_var = torch.exp(right_x[..., 4]).view(-1, 1)
 
-        angle_out = y_pred[:, :2]
-        angle_acc = metric(angle_out, y_true)
+            # combine the results of the left & right outputs under an IVW scheme
+            sum_variances = (1.0 / (1.0 / left_x_var + right_x_var))
+            angle_out = ((left_x_angle / left_x_var) + (right_x_angle / right_x_var)) * sum_variances
 
-        if self.loss_num_out == 2:
-            loss = self._criterion(angle_out, y_true)
-        elif self.loss_num_out == 3:
-            variance = y_pred[:, 2]
-            variance = torch.exp(variance)
-            loss = self._criterion(angle_out, y_true, variance)
-            angle_acc["variance"] = variance.mean()
+            angle_acc = metric(angle_out, y_true)
+            angle_acc["variance"] = sum_variances.mean()
+
+            loss = self._criterion(angle_out, y_true, sum_variances)
         else:
-            raise ValueError(f"Number out isn't right ({self.loss_num_out}) or unknown loss function {self.hparams.loss_fn}")
+            angle_out = (left_x_angle + right_x_angle) / 2.0
+            angle_acc = metric(angle_out, y_true)
+            loss = self._criterion(angle_out, y_true)
 
         angle_acc["loss"] = loss
         return angle_acc
@@ -105,10 +107,9 @@ class TrainRTGENE(pl.LightningModule):
 
     def configure_optimizers(self):
         params_to_update = [param for name, param in self.model.named_parameters()]
-        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate, weight_decay=1e-4)
+        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate, betas=(0.9, 0.95))
 
         train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, self.hparams.max_epochs - self.hparams.warmup_epochs)
-        warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda current_step: 1 / (10 ** (float(self.hparams.warmup_epochs - current_step))))
         constant_scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, 1.0, self.hparams.warmup_epochs)
 
         scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, [constant_scheduler, train_scheduler], [self.hparams.warmup_epochs])
@@ -128,10 +129,11 @@ class TrainRTGENE(pl.LightningModule):
 if __name__ == "__main__":
     root_parser = ArgumentParser(add_help=False)
     root_parser.add_argument('--dataset_path', type=str, required=True)
-    root_parser.add_argument('--num_io_workers', default=8, type=int)
+    root_parser.add_argument('--num_io_workers', default=0, type=int)
     root_parser.add_argument('--seed', type=int, default=0)
     root_parser.add_argument('--warmup_epochs', type=int, default=10)
     root_parser.add_argument('--max_epochs', type=int, default=200, help="Maximum number of epochs to perform; the trainer will Exit after.")
+    root_parser.add_argument('--tune_lr', action="store_true", dest="tune_lr", default=False)
 
     model_parser = TrainRTGENE.add_model_specific_args(root_parser)
     hyperparams = model_parser.parse_args()
@@ -149,7 +151,14 @@ if __name__ == "__main__":
     trainer = pl.Trainer(accelerator="gpu",
                          devices="auto",
                          precision="16-mixed",
+                         val_check_interval=0.2,
                          callbacks=[checkpoint_callback, lr_callback],
                          max_epochs=hyperparams.max_epochs,
                          logger=wandb_logger)
+    if hyperparams.tune_lr:
+        from pytorch_lightning.tuner import Tuner
+
+        tuner = Tuner(trainer)
+        tuner.lr_find(model)
+
     trainer.fit(model)

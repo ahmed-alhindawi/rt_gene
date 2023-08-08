@@ -35,7 +35,7 @@ class RTGENEWithinSubjectDataset(data.Dataset):
         match phase:
             case TrainingPhase.Training:
                 self._transform = albu.Compose([
-                    albu.RandomResizedCrop(36, 60, always_apply=True),
+                    albu.RandomResizedCrop(36, 60, scale=(0.8, 1.2), always_apply=True),
                     albu.RandomBrightnessContrast(p=0.1),
                     albu.OneOf([
                         albu.GaussianBlur(),

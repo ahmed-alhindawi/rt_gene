@@ -4,6 +4,7 @@ from torchvision import models
 import timm
 from enum import Enum
 from torch import Tensor
+import torch.nn.functional as F
 
 
 class GazeEstimationAbstractModel(nn.Module):
@@ -308,7 +309,7 @@ class GazeEstimationModelResnet18SingleEye(nn.Module):
                                    nn.GELU(),
                                    nn.Linear(backbone.num_features, backbone.num_features),
                                    nn.GroupNorm(8, backbone.num_features),
-                                   nn.ELU(),
+                                   nn.Tanh(),
                                    nn.Linear(backbone.num_features, num_out),
                                    )
 
