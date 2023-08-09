@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, \
     GazeEstimationModelVGG, GazeEstimationModelPreactResnet
-from rtgene_dataset import RTGENEH5Dataset
+from datasets.RTGENEDataset import RTGENEH5Dataset
 from utils.GazeAngleAccuracy import GazeAngleAccuracy
 
 

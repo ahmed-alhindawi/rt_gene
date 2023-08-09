@@ -5,18 +5,13 @@ import torch
 from torch.utils import data
 from torchvision import transforms
 import torchvision.io as tio
-from enum import Enum
 import albumentations as albu
 from albumentations import pytorch
 import cv2
+from datasets.TrainingPhase import TrainingPhase
 
 
-class RTGENEWithinSubjectFileDataset(data.Dataset):
-    class TrainingPhase(Enum):
-        Training = 0
-        Validation = 2
-        Testing = 3
-
+class RTGENEWithinSubjectDataset(data.Dataset):
     def __init__(self, root_path, phase=TrainingPhase.Training, fraction=0.95):
         self._root_path = root_path
 
@@ -38,22 +33,23 @@ class RTGENEWithinSubjectFileDataset(data.Dataset):
         assert len(labels) > 0, f"No data found in {root_path}"
 
         match phase:
-            case RTGENEWithinSubjectFileDataset.TrainingPhase.Training:
+            case TrainingPhase.Training:
                 self._transform = albu.Compose([
-                    albu.RandomResizedCrop(36, 60, always_apply=True),
+                    albu.RandomResizedCrop(36, 60, scale=(0.8, 1.2), always_apply=True),
                     albu.RandomBrightnessContrast(p=0.1),
                     albu.OneOf([
                         albu.GaussianBlur(),
                         albu.ISONoise()
                         ], p=0.1),
-                    albu.ColorJitter(),
-                    albu.HueSaturationValue(),
+                    albu.ColorJitter(p=0.1),
+                    albu.Equalize(p=0.1),
+                    albu.HueSaturationValue(p=0.1),
                     albu.Normalize(),
                     albu.pytorch.ToTensorV2(),
                 ])
                 end_num = int(len(labels) * fraction)
                 self._data = labels[:end_num]
-            case RTGENEWithinSubjectFileDataset.TrainingPhase.Validation:
+            case TrainingPhase.Validation:
                 self._transform = albu.Compose([
                     albu.Resize(36, 60),
                     albu.Normalize(),
@@ -61,7 +57,7 @@ class RTGENEWithinSubjectFileDataset(data.Dataset):
                 ])
                 end_num = int(len(labels) * fraction)
                 self._data = labels[-end_num:]
-            case RTGENEWithinSubjectFileDataset.TrainingPhase.Testing:
+            case TrainingPhase.Testing:
                 self._transform = albu.Compose([
                     albu.Resize(36, 60),
                     albu.Normalize(),
@@ -88,7 +84,7 @@ class RTGENEWithinSubjectFileDataset(data.Dataset):
         return transformed_lt, transformed_rt, ground_truth_headpose, ground_truth_gaze
 
 
-class RTGENECrossSubjectFileDataset(data.Dataset):
+class RTGENECrossSubjectDataset(data.Dataset):
 
     def __init__(self, root_path, subject_list=None, transform=None):
         self._root_path = root_path

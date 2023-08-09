@@ -9,7 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange
 
 from gaze_estimation_models_pytorch import GazeEstimationModelResnet18
-from rtgene_dataset import RTGENEH5Dataset
+from datasets.RTGENEDataset import RTGENEH5Dataset
 
 
 class RTGENELearningRateFinder(object):

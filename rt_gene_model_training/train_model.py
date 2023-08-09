@@ -10,8 +10,8 @@ from torchmetrics import MetricCollection
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 
 from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18, GazeEstimationModelVGG, GazeEstimationModelResnet18Uncertainty, GazeEstimationModelVGGUncertainty, \
-    GazeEstimationModelResnet50Uncertainty,GazeEstimationModelResnet18SingleEye
-from rtgene_dataset import RTGENEWithinSubjectFileDataset
+    GazeEstimationModelResnet50Uncertainty
+from datasets.RTGENEDataset import RTGENEWithinSubjectDataset
 from utils.CustomLoss import PinballLoss, LaplacianNLL, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
 
@@ -30,7 +30,6 @@ MODELS = {
     "vgg16": GazeEstimationModelVGG,
     "vgg16_uncertainty": GazeEstimationModelVGGUncertainty,
     "resnet50_uncertainty": GazeEstimationModelResnet50Uncertainty,
-    "resnet18_single_eye": GazeEstimationModelResnet18SingleEye
 }
 
 
@@ -58,40 +57,6 @@ class TrainRTGENE(pl.LightningModule):
     def forward(self, inputs):
         return self.model(*inputs)
 
-    def shared_step_single_eye(self, batch, metric):
-        left_patch, right_patch, _, y_true = batch
-
-        left_x = self.forward([left_patch])
-        right_x = self.forward([right_patch])
-
-        # take the mean of those two
-        left_x[..., 2] = torch.exp(left_x[..., 2])
-        right_x[..., 2] = torch.exp(right_x[..., 2])
-
-        # combine the results of the left & right outputs under an IVW scheme
-        sum_variances = (1.0 / (1.0 / left_x[..., 2] + right_x[..., 2])).view(-1, 1)
-        y_pred = ((left_x[..., :2] / left_x[..., 2].view(-1, 1)) + (right_x[..., :2] / right_x[..., 2].view(-1, 1))) * sum_variances
-        y_pred = torch.concat((y_pred, torch.log(sum_variances)), dim=-1)
-
-        angle_out = y_pred[:, :2]
-        angle_acc = metric(angle_out, y_true)
-
-        if self.loss_num_out == 2:
-            loss = self._criterion(angle_out, y_true)
-        elif self.loss_num_out == 3:
-            variance = y_pred[:, 2]
-
-            if self.hparams.loss_fn != "pinball":
-                variance = torch.exp(variance)
-
-            loss = self._criterion(angle_out, y_true, variance)
-            angle_acc["variance"] = variance.mean()
-        else:
-            raise ValueError(f"Number out isn't right ({self.loss_num_out}) or unknown loss function {self.hparams.loss_fn}")
-
-        angle_acc["loss"] = loss
-        return angle_acc
-
     def shared_step(self, batch, metric):
         left_patch, right_patch, headpose_label, y_true = batch
 
@@ -116,21 +81,21 @@ class TrainRTGENE(pl.LightningModule):
         return angle_acc
 
     def training_step(self, batch, batch_idx):
-        results = self.shared_step_single_eye(batch, self._train_metrics)
+        results = self.shared_step(batch, self._train_metrics)
         self.log_dict({f"train_{k}": v for k, v in results.items()})
         return results["loss"]
 
     def validation_step(self, batch, batch_idx):
-        results = self.shared_step_single_eye(batch, self._val_metrics)
+        results = self.shared_step(batch, self._val_metrics)
         self.log_dict({f"val_{k}": v for k, v in results.items()})
         return results["loss"]
 
     def train_dataloader(self):
-        dataset = RTGENEWithinSubjectFileDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectFileDataset.TrainingPhase.Training, fraction=0.90)
+        dataset = RTGENEWithinSubjectDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectDataset.TrainingPhase.Training, fraction=0.90)
         return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def val_dataloader(self):
-        dataset = RTGENEWithinSubjectFileDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectFileDataset.TrainingPhase.Validation, fraction=0.10)
+        dataset = RTGENEWithinSubjectDataset(root_path=self.hparams.dataset_path, phase=RTGENEWithinSubjectDataset.TrainingPhase.Validation, fraction=0.10)
         return DataLoader(dataset, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def configure_optimizers(self):
@@ -167,13 +132,11 @@ if __name__ == "__main__":
     model = TrainRTGENE(hparams=hyperparams)
     checkpoint_callback = ModelCheckpoint(monitor='val_loss', mode='min', verbose=False, save_top_k=5)
     lr_callback = LearningRateMonitor()
-    
-    torch.set_float32_matmul_precision('high')
 
     # start training
     trainer = pl.Trainer(accelerator="gpu",
                          devices="auto",
-                         precision=32,
+                         precision="16-mixed",
                          callbacks=[checkpoint_callback, lr_callback],
                          max_epochs=hyperparams.max_epochs,
                          logger=wandb_logger)
