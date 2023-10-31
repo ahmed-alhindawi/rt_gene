@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from torchmetrics import MetricCollection
 from torchmetrics.regression import MeanSquaredError, MeanAbsoluteError
 
-from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnet18SingleEye
+from rt_gene.gaze_estimation_models_pytorch import GazeEstimationModelResnetSingleEye
 from datasets import RTGENEWithinSubjectDataset, MPIIWithinSubjectDataset, TrainingPhase
 from utils.CustomLoss import LaplacianNLL, CharbonnierNLL
 from utils.GazeAngleAccuracy import GazeAngleMetric
@@ -18,13 +18,14 @@ from utils.GazeAngleAccuracy import GazeAngleMetric
 LOSS_FN = {
     "mse": (torch.nn.MSELoss, 4),
     "mae": (torch.nn.L1Loss, 4),
-    "gnll": (torch.nn.GaussianNLLLoss, 5),
-    "lnll": (LaplacianNLL, 5),
+    "gnll": (torch.nn.GaussianNLLLoss, 4),
+    "lnll": (LaplacianNLL, 4),
     "cnll": (partial(CharbonnierNLL, transition=1e-3, slope=1), 5)
 }
 
 MODELS = {
-    "resnet18": GazeEstimationModelResnet18SingleEye
+    "resnet18": partial(GazeEstimationModelResnetSingleEye, backbone=GazeEstimationModelResnetSingleEye.ResNetBackbone.Resnet18),
+    "resnet50": partial(GazeEstimationModelResnetSingleEye, backbone=GazeEstimationModelResnetSingleEye.ResNetBackbone.Resnet50),
 }
 
 
@@ -32,6 +33,8 @@ class TrainRTGENE(pl.LightningModule):
 
     def __init__(self, hparams):
         super(TrainRTGENE, self).__init__()
+        self.save_hyperparameters(hparams)
+
         loss_fn, num_out = LOSS_FN.get(hparams.loss_fn)
 
         self.model = MODELS.get(hparams.model_base)(num_out=num_out)
@@ -47,7 +50,6 @@ class TrainRTGENE(pl.LightningModule):
             MeanAbsoluteError(),
             GazeAngleMetric()
         ])
-        self.save_hyperparameters(hparams)
 
     def forward(self, inputs):
         return self.model(*inputs)
@@ -61,14 +63,17 @@ class TrainRTGENE(pl.LightningModule):
         left_x_angle = torch.concat((torch.arctan2(left_x[..., 0], left_x[..., 1]).view(-1, 1), torch.arctan2(left_x[..., 2], left_x[..., 3]).view(-1, 1)), dim=1)
         right_x_angle = torch.concat((torch.arctan2(right_x[..., 0], right_x[..., 1]).view(-1, 1), torch.arctan2(right_x[..., 2], right_x[..., 3]).view(-1, 1)), dim=1)
 
-        if self.loss_num_out == 5:
+        if self.loss_num_out == 4:
             # take the mean of those two
-            left_x_var = torch.exp(left_x[..., 4]).view(-1, 1)
-            right_x_var = torch.exp(right_x[..., 4]).view(-1, 1)
+            # left_x_var = torch.exp(left_x[..., 4]).view(-1, 1)
+            # right_x_var = torch.exp(right_x[..., 4]).view(-1, 1)
+            left_x_var = torch.sqrt(left_x[..., 0] ** 2 + left_x[..., 1] ** 2).view(-1, 1)
+            right_x_var = torch.sqrt(right_x[..., 0] ** 2 + right_x[..., 1] ** 2).view(-1, 1)
 
+            # the longer the radius is, the more precise we are, therefore we can use precision = 1/var
             # combine the results of the left & right outputs under an IVW scheme
-            sum_variances = (1.0 / ((1.0 / left_x_var) + (1.0 / right_x_var)))
-            angle_out = ((left_x_angle / left_x_var) + (right_x_angle / right_x_var)) * sum_variances
+            sum_variances = (1.0 / (left_x_var + right_x_var))
+            angle_out = ((left_x_angle * left_x_var) + (right_x_angle * right_x_var)) / sum_variances
 
             angle_acc = metric(angle_out, y_true)
             angle_acc["variance"] = sum_variances.mean()
@@ -106,7 +111,7 @@ class TrainRTGENE(pl.LightningModule):
 
     def configure_optimizers(self):
         params_to_update = [param for name, param in self.model.named_parameters()]
-        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate)
+        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate, weight_decay=1e-4)
 
         train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, self.hparams.max_epochs - self.hparams.warmup_epochs)
         constant_scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, 1.0, self.hparams.warmup_epochs)

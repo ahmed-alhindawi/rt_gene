@@ -50,7 +50,7 @@ class LaplacianNLL(nn.Module):
         self._reduction_strategy = _reduction_strategies.get(reduction)
 
     def forward(self, y_pred, y_true, scale):
-        log_s = torch.log(2 * scale).view(-1, 1)
+        log_s = torch.log(0.5 * scale).view(-1, 1)
         mae = torch.abs(y_true - y_pred)
         loss = log_s + (mae / scale.view(-1, 1))
 

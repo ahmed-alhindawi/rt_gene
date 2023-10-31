@@ -292,7 +292,7 @@ class GazeEstimationModelVGGUncertainty(GazeEstimationAbstractModel):
         return self.forward_with_uncertainty(left, right, headpose, self.left_features, self.xl, self.right_features, self.xr)
 
 
-class GazeEstimationModelResnet18SingleEye(nn.Module):
+class GazeEstimationModelResnetSingleEye(nn.Module):
 
     class ResNetBackbone(Enum):
         Resnet18 = "resnet18"
