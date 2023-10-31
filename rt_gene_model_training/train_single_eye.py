@@ -61,14 +61,13 @@ class TrainRTGENE(pl.LightningModule):
         left_x_angle = torch.concat((torch.arctan2(left_x[..., 0], left_x[..., 1]).view(-1, 1), torch.arctan2(left_x[..., 2], left_x[..., 3]).view(-1, 1)), dim=1)
         right_x_angle = torch.concat((torch.arctan2(right_x[..., 0], right_x[..., 1]).view(-1, 1), torch.arctan2(right_x[..., 2], right_x[..., 3]).view(-1, 1)), dim=1)
 
-        angle_acc = dict()
         if self.loss_num_out == 5:
             # take the mean of those two
             left_x_var = torch.exp(left_x[..., 4]).view(-1, 1)
             right_x_var = torch.exp(right_x[..., 4]).view(-1, 1)
 
             # combine the results of the left & right outputs under an IVW scheme
-            sum_variances = (1.0 / (1.0 / left_x_var + right_x_var))
+            sum_variances = (1.0 / ((1.0 / left_x_var) + (1.0 / right_x_var)))
             angle_out = ((left_x_angle / left_x_var) + (right_x_angle / right_x_var)) * sum_variances
 
             angle_acc = metric(angle_out, y_true)
@@ -94,20 +93,20 @@ class TrainRTGENE(pl.LightningModule):
         return results["loss"]
 
     def train_dataloader(self):
-        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt_gene/"), phase=TrainingPhase.Training, fraction=0.95)
-        mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Training, fraction=0.95)
-        ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
-        return DataLoader(ds, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
+        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt-gene/"), phase=TrainingPhase.Training, fraction=0.95)
+        # mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Training, fraction=0.95)
+        # ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
+        return DataLoader(rt_gene_ds, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def val_dataloader(self):
-        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt_gene/"), phase=TrainingPhase.Validation, fraction=0.05)
-        mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Validation, fraction=0.05)
-        ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
-        return DataLoader(ds, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
+        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt-gene/"), phase=TrainingPhase.Validation, fraction=0.05)
+        # mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Validation, fraction=0.05)
+        # ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
+        return DataLoader(rt_gene_ds, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def configure_optimizers(self):
         params_to_update = [param for name, param in self.model.named_parameters()]
-        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate, betas=(0.9, 0.95))
+        optimizer = torch.optim.AdamW(params_to_update, lr=self.hparams.learning_rate)
 
         train_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, self.hparams.max_epochs - self.hparams.warmup_epochs)
         constant_scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer, 1.0, self.hparams.warmup_epochs)
@@ -133,7 +132,6 @@ if __name__ == "__main__":
     root_parser.add_argument('--seed', type=int, default=0)
     root_parser.add_argument('--warmup_epochs', type=int, default=10)
     root_parser.add_argument('--max_epochs', type=int, default=200, help="Maximum number of epochs to perform; the trainer will Exit after.")
-    root_parser.add_argument('--tune_lr', action="store_true", dest="tune_lr", default=False)
 
     model_parser = TrainRTGENE.add_model_specific_args(root_parser)
     hyperparams = model_parser.parse_args()
@@ -147,18 +145,18 @@ if __name__ == "__main__":
     checkpoint_callback = ModelCheckpoint(monitor='val_loss', mode='min', verbose=False, save_top_k=5)
     lr_callback = LearningRateMonitor()
 
+    try:
+        torch.set_float32_matmul_precision("medium")
+    finally:
+        pass
+
     # start training
     trainer = pl.Trainer(accelerator="gpu",
                          devices="auto",
-                         precision="16-mixed",
+                         precision="32",
                          val_check_interval=0.2,
                          callbacks=[checkpoint_callback, lr_callback],
                          max_epochs=hyperparams.max_epochs,
                          logger=wandb_logger)
-    if hyperparams.tune_lr:
-        from pytorch_lightning.tuner import Tuner
-
-        tuner = Tuner(trainer)
-        tuner.lr_find(model)
 
     trainer.fit(model)

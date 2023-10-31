@@ -9,11 +9,14 @@ import albumentations as albu
 from albumentations import pytorch
 import cv2
 from datasets.TrainingPhase import TrainingPhase
+import numpy as np
+
 
 
 class RTGENEWithinSubjectDataset(data.Dataset):
-    def __init__(self, root_path, phase=TrainingPhase.Training, fraction=0.95):
+    def __init__(self, root_path, phase=TrainingPhase.Training, fraction=0.95, flip_right_patch=True):
         self._root_path = root_path
+        self._flip_right_patch = flip_right_patch
 
         labels = []
 
@@ -77,6 +80,7 @@ class RTGENEWithinSubjectDataset(data.Dataset):
         # Load data and get label
         left_img = cv2.imread(sample[0])
         right_img = cv2.imread(sample[1])
+        right_img = np.fliplr(right_img) if self._flip_right_patch else right_img
 
         transformed_lt = self._transform(image=left_img)["image"]
         transformed_rt = self._transform(image=right_img)["image"]
