@@ -26,6 +26,13 @@ LOSS_FN = {
 MODELS = {
     "resnet18": partial(GazeEstimationModelResnetSingleEye, backbone=GazeEstimationModelResnetSingleEye.ResNetBackbone.Resnet18),
     "resnet50": partial(GazeEstimationModelResnetSingleEye, backbone=GazeEstimationModelResnetSingleEye.ResNetBackbone.Resnet50),
+    "wresnet50_2": partial(GazeEstimationModelResnetSingleEye, backbone=GazeEstimationModelResnetSingleEye.ResNetBackbone.WResnet50_2),
+    "wresnet101_2": partial(GazeEstimationModelResnetSingleEye, backbone=GazeEstimationModelResnetSingleEye.ResNetBackbone.WResnet101_2),
+}
+
+DATASETS = {
+    "rt-gene": RTGENEWithinSubjectDataset,
+    "MPIIGaze": MPIIWithinSubjectDataset
 }
 
 
@@ -60,17 +67,16 @@ class TrainRTGENE(pl.LightningModule):
         left_x = self.forward([left_patch])
         right_x = self.forward([right_patch])
 
-        left_x_angle = torch.concat((torch.arctan2(left_x[..., 0], left_x[..., 1]).view(-1, 1), torch.arctan2(left_x[..., 2], left_x[..., 3]).view(-1, 1)), dim=1)
-        right_x_angle = torch.concat((torch.arctan2(right_x[..., 0], right_x[..., 1]).view(-1, 1), torch.arctan2(right_x[..., 2], right_x[..., 3]).view(-1, 1)), dim=1)
+        left_x_angle = torch.concat((torch.arctan2(left_x[..., 0], left_x[..., 1]).view(-1, 1), torch.arctan2(left_x[..., 2], left_x[..., 3]).view(-1, 1)),
+                                    dim=1)
+        right_x_angle = torch.concat((torch.arctan2(right_x[..., 0], right_x[..., 1]).view(-1, 1), torch.arctan2(right_x[..., 2], right_x[..., 3]).view(-1, 1)),
+                                     dim=1)
 
         if self.loss_num_out == 4:
-            # take the mean of those two
-            # left_x_var = torch.exp(left_x[..., 4]).view(-1, 1)
-            # right_x_var = torch.exp(right_x[..., 4]).view(-1, 1)
+            # the longer the radius is, the more precise we are, therefore we can use precision = 1/var
             left_x_var = torch.sqrt(left_x[..., 0] ** 2 + left_x[..., 1] ** 2).view(-1, 1)
             right_x_var = torch.sqrt(right_x[..., 0] ** 2 + right_x[..., 1] ** 2).view(-1, 1)
 
-            # the longer the radius is, the more precise we are, therefore we can use precision = 1/var
             # combine the results of the left & right outputs under an IVW scheme
             sum_variances = (1.0 / (left_x_var + right_x_var))
             angle_out = ((left_x_angle * left_x_var) + (right_x_angle * right_x_var)) / sum_variances
@@ -98,16 +104,22 @@ class TrainRTGENE(pl.LightningModule):
         return results["loss"]
 
     def train_dataloader(self):
-        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt-gene/"), phase=TrainingPhase.Training, fraction=0.95)
-        # mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Training, fraction=0.95)
-        # ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
-        return DataLoader(rt_gene_ds, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
+        datasets = []
+        for ds_name in self.hparams.dataset:
+            ds = DATASETS[ds_name](root_path=os.path.join(self.hparams.dataset_root, ds_name), phase=TrainingPhase.Training, fraction=0.95)
+            datasets.append(ds)
+
+        concat_ds = torch.utils.data.ConcatDataset(datasets)  # this will introduce a slight overhead with 1 dataset, but it is cleaner
+        return DataLoader(concat_ds, batch_size=self.hparams.batch_size, shuffle=True, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def val_dataloader(self):
-        rt_gene_ds = RTGENEWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "rt-gene/"), phase=TrainingPhase.Validation, fraction=0.05)
-        # mpii_ds = MPIIWithinSubjectDataset(root_path=os.path.join(self.hparams.dataset_path, "MPIIGaze/"), phase=TrainingPhase.Validation, fraction=0.05)
-        # ds = torch.utils.data.ConcatDataset([rt_gene_ds, mpii_ds])
-        return DataLoader(rt_gene_ds, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
+        datasets = []
+        for ds_name in self.hparams.dataset:
+            ds = DATASETS[ds_name](root_path=os.path.join(self.hparams.dataset_root, ds_name), phase=TrainingPhase.Validation, fraction=0.05)
+            datasets.append(ds)
+
+        concat_ds = torch.utils.data.ConcatDataset(datasets)  # this will introduce a slight overhead with 1 dataset, but it is cleaner
+        return DataLoader(concat_ds, batch_size=self.hparams.batch_size, shuffle=False, num_workers=self.hparams.num_io_workers, pin_memory=True)
 
     def configure_optimizers(self):
         params_to_update = [param for name, param in self.model.named_parameters()]
@@ -132,7 +144,8 @@ class TrainRTGENE(pl.LightningModule):
 
 if __name__ == "__main__":
     root_parser = ArgumentParser(add_help=False)
-    root_parser.add_argument('--dataset_path', type=str, required=True)
+    root_parser.add_argument('--dataset_root', type=str, required=True)
+    root_parser.add_argument('--dataset', required=True, action="append", default=list())
     root_parser.add_argument('--num_io_workers', default=0, type=int)
     root_parser.add_argument('--seed', type=int, default=0)
     root_parser.add_argument('--warmup_epochs', type=int, default=10)
@@ -140,6 +153,7 @@ if __name__ == "__main__":
 
     model_parser = TrainRTGENE.add_model_specific_args(root_parser)
     hyperparams = model_parser.parse_args()
+    hyperparams.dataset = list(set(hyperparams.dataset))  # remove duplicates
 
     pl.seed_everything(hyperparams.seed)
 

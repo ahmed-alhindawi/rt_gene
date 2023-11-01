@@ -299,17 +299,19 @@ class GazeEstimationModelResnetSingleEye(nn.Module):
         Resnet34 = "resnet34"
         Resnet50 = "resnet50"
         Resnet101 = "resnet101"
+        WResnet50_2 = "wide_resnet50_2"
+        WResnet101_2 = "wide_resnet101_2"
 
     def __init__(self, backbone=ResNetBackbone.Resnet18, num_out: int = 2):
         super().__init__()
         backbone = timm.create_model(backbone.value, pretrained=True, num_classes=0)
 
         self.model = nn.Sequential(backbone,
-                                   nn.GroupNorm(8, backbone.num_features),
-                                   nn.GELU(),
+                                   nn.GroupNorm(4, backbone.num_features),
+                                   nn.SiLU(),
                                    nn.Linear(backbone.num_features, backbone.num_features),
-                                   nn.GroupNorm(8, backbone.num_features),
-                                   nn.Tanh(),
+                                   nn.GroupNorm(4, backbone.num_features),
+                                   nn.SiLU(),
                                    nn.Linear(backbone.num_features, num_out),
                                    )
 
